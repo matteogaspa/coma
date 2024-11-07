@@ -1,6 +1,19 @@
-# coma
- Conformal Online Model Aggregation
+# Conformal online model aggregation
 
-Pubblic repository of Conformal Online Model Aggregation.
+This is a folder used to reproduce the experiments in the 'Conformal online model aggregation' paper. 
 
-Each folder contains a script with supporting functions, data, and code to reproduce the analysis results.
+
+## Structure 
+
+The repository contains all the R scripts for the analysis.
+
+
+## Folder
+
+Folder names are self-explanatory.
+
+Each folder contains:
+- An R script "utils_funs.R" containing some functions used in the main analysis.
+- An R script containing the code of the main analysis and the code to reproduce the plots.
+- Where appropriate the dataset (a .csv file or a .txt file).
+

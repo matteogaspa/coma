@@ -7,7 +7,7 @@ library(glmnet)
 library(ggplot2)
 library(gridExtra)
 library(limSolve)
-source("utilsFuns.R")
+source("utils_funs.R")
 
 # Load data -----
 dati <- read.table("affitti.txt", header = T)
@@ -103,8 +103,10 @@ p1<-ggplot(results1, aes(x = iter)) +
   geom_line(aes(y = Hedge_1, color = "eta = 1"), linetype = "longdash", size = 1) +
   geom_line(aes(y = AdaHedge, color =  "Adaptive eta"), linetype = "dashed", size = 1) + 
   labs(title = "", x = "Iter", y = "Hedge Loss", color = "") +
-  scale_color_manual(values = c("RF" = "blue", "eta = 0.1" = "red", "eta = 1" = "forestgreen", "Adaptive eta" = "orange")) +
-  theme_minimal() + theme(legend.position = "bottom") +
+  scale_color_manual(
+    values = c("RF" = "blue", "eta = 0.1" = "red", "eta = 1" = "forestgreen", "Adaptive eta" = "orange"),
+    labels = c("RF" = "RF", "eta = 0.1" = expression(eta==0.1), "eta = 1" = expression(eta==1), "Adaptive eta" = expression(paste("Adaptive ",eta)), "NN" = "NN")) +
+  theme_minimal() + theme(legend.position = "right", axis.title.y = element_text(size = 20), axis.title.x = element_text(size = 20), legend.text = element_text(size = 12)) +
   guides(linetype = guide_legend(keywidth = 3, keyheight = 1)) +
   ylim(1.55, 1.9)
 
@@ -128,8 +130,10 @@ p2<-ggplot(results2, aes(x = iter)) +
   geom_line(aes(y = Hedge_1, color = "eta = 1"), linetype = "longdash", size = 1) +
   geom_line(aes(y = AdaHedge, color = "Adaptive eta"), linetype = "dashed", size = 1) + 
   labs(title = "", x = "Iter", y = "Hedge Loss", color = "") +
-  scale_color_manual(values = c("RF" = "blue", "eta = 0.1" = "red", "eta = 1" = "forestgreen", "Adaptive eta" = "orange", "NN" = "pink")) +
-  theme_minimal() + theme(legend.position = "bottom") +
+  scale_color_manual(
+    values = c("RF" = "blue", "eta = 0.1" = "red", "eta = 1" = "forestgreen", "Adaptive eta" = "orange", "NN" = "pink"),
+    labels = c("RF" = "RF", "eta = 0.1" = expression(eta==0.1), "eta = 1" = expression(eta==1), "Adaptive eta" = expression(paste("Adaptive ",eta)), "NN" = "NN")) +
+  theme_minimal() + theme(legend.position = "right", axis.title.y = element_text(size = 20), axis.title.x = element_text(size = 20), legend.text = element_text(size = 12)) +
   ylim(1.55, 1.9)
 
 grid.arrange(p1, p2, nrow = 1)
@@ -170,7 +174,7 @@ for(i in num.t){
      geom_bar(stat = "identity", position = "dodge") +
      facet_grid(. ~ algorithm, scales = "free", space = "free") +
      labs(title = paste("t =",i), x = "", y = "Weight") +
-     theme_minimal() + ylim(0, 1) + theme(legend.position = "none") +
+     theme_minimal() + ylim(0, 1) + theme(legend.position = "none") + 
      theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
 }
 
@@ -239,5 +243,28 @@ for(i in 1:t){
 
 colMeans(cov_mv); colMeans(cov_rmv)
 
+# eta plot ----
+data_eta <- data.frame(
+  "iter" = 1:length(ada_alg$eta),
+  "k4" = ada_alg$eta,
+  "k5" = ada_alg_nn$eta
+)
 
+peta1<-ggplot(data_eta, aes(x = iter)) +
+  geom_line(aes(y = k4, color = "K=4"), linetype = "solid", size = 1) +
+  geom_line(aes(y = k5, color = "K=5"), linetype = "solid", size = 1) +
+  labs(title = "", x = "Iter", y = expression(eta), color = "") +
+  scale_color_manual(values = c("K=4" = "lightcoral", "K=5" = "navy")) +
+  geom_hline(yintercept = 0.1, col = "tan1", linetype = "dashed") +
+  geom_hline(yintercept = 1, col = "tan4", linetype = "dashed") +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(0,50)
 
+peta2<-ggplot(data_eta, aes(x = iter)) +
+  geom_line(aes(y = k4, color = "K=4"), linetype = "solid", size = 1) +
+  geom_line(aes(y = k5, color = "K=5"), linetype = "solid", size = 1) +
+  labs(title = "", x = "Iter", y = expression(eta), color = "") +
+  scale_color_manual(values = c("K=4" = "lightcoral", "K=5" = "navy")) +
+  geom_hline(yintercept = 0.1, col = "tan1", linetype = "dashed") +
+  geom_hline(yintercept = 1, col = "tan4", linetype = "dashed") +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(0,10)
+grid.arrange(peta1, peta2, ncol = 2)

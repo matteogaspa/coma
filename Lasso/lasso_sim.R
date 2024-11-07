@@ -1,0 +1,359 @@
+rm(list = ls())
+library(glmnet)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+source("utils_funs.R")
+
+# Simulate data -----
+N      <- 3100
+p      <- 100
+burnin <- 100
+alpha  <- 0.1
+
+set.seed(1)
+X      <- matrix(rnorm((N + burnin) * p), nrow = N + burnin, ncol = p)
+beta   <- c(rnorm(p/10, 0, 4), rep(0, p*(9/10)))
+y      <- rep(NA, N+burnin)
+y[1]   <- rnorm(1)
+err    <- rep(NA, N+burnin)
+err[1] <- 0
+
+for(i in 2:(N+burnin)){
+  err[i] <- rnorm(1)
+  y[i]   <- 0.3*y[i-1] + X[i,] %*% beta - 0.3*err[i-1] + err[i]
+}
+
+y     <- y[(burnin+1):(N+burnin)]
+X     <- X[(burnin+1):(N+burnin),]
+NROW(y); NROW(X)
+
+# Lasso with different parameters -----
+runLasso <- function(Y,X,alpha,nu,q,lambda,tinit=100){
+  # Y: outcome
+  # X: covariates
+  # alpha: conf.level
+  # nu: learning parameter
+  # q: initial quantiles
+  
+  T <- length(Y)
+  ## Initialize data storage variables
+  qTrajectory <- rep(NA, T-tinit+1)
+  adaptErrSeq <- rep(NA, T-tinit+1)
+  piAdapt     <- matrix(NA, nrow = T-tinit+1, ncol=2)
+  qT          <- q
+  
+  for(t in tinit:T){
+    newX <- X[1:(t-1),]
+    newY <- Y[1:(t-1)]
+    
+    ### Fit regression 
+    lmfit <- glmnet(newX, newY, alpha = 1, lambda = lambda)
+    
+    predt <- as.numeric(c(1, X[t,])%*%coef(lmfit))
+    
+    ### Compute errt 
+    adaptErrSeq[t-tinit+1] <- 1 - I(abs(predt - Y[t]) <= qT)
+    piAdapt[t-tinit+1,]    <- c(predt - qT, predt + qT)
+
+    ## update qT
+    qTrajectory[t-tinit+1] <- qT
+    qT <- qT + nu*(adaptErrSeq[t-tinit+1]-alpha)
+    
+    if(t %% 100 == 0){
+      print(sprintf("Done %i time steps",t))
+    }
+  }
+  return(list(q_t=qTrajectory,
+              AdaptErr=adaptErrSeq,
+              piAdapt=piAdapt))
+}
+
+
+lambda_seq <- c(exp(seq(-4, 2, length = 9)))
+m1 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[1])
+m2 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[2])
+m3 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[3])
+m4 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[4])
+m5 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[5])
+m6 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[6])
+m7 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[7])
+m8 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[8])
+m9 <- runLasso(y, X, 0.1, q = 0, nu = 2, lambda = lambda_seq[9])
+
+# Coma ------
+# Adaptive eta
+loss.matrix <- cbind(m1$piAdapt[,2] - m1$piAdapt[,1], m2$piAdapt[,2] - m2$piAdapt[,1], m3$piAdapt[,2] - m3$piAdapt[,1], m4$piAdapt[,2] - m4$piAdapt[,1], m5$piAdapt[,2] - m5$piAdapt[,1], 
+                     m6$piAdapt[,2] - m6$piAdapt[,1], m7$piAdapt[,2] - m7$piAdapt[,1], m8$piAdapt[,2] - m8$piAdapt[,1], m9$piAdapt[,2] - m9$piAdapt[,1])
+adahedAlg <- adahedge(loss.matrix)
+
+N <- NROW(adahedAlg$weights)
+K <- NCOL(adahedAlg$weights)
+t <- NROW(X)-N-1
+pi.m   <- pi.wm <- matrix(NA, N, 2)
+m.cov  <- rep(NA, N)
+wm.cov <- rep(NA, N)
+
+set.seed(1)
+for(i in 1:N){
+  conf.t    <- rbind(m1$piAdapt[i,], m2$piAdapt[i,], m3$piAdapt[i,], m4$piAdapt[i,], m5$piAdapt[i,], m6$piAdapt[i,], m7$piAdapt[i,], m8$piAdapt[i,], m9$piAdapt[i,])
+  maj.int   <- majority_vote(conf.t, w=adahedAlg$weights[i,], 0.5)
+  wmaj.int  <- majority_vote(conf.t, w=adahedAlg$weights[i,], runif(1, 0.5, 1))
+  m.cov[i]  <- covr_fun(maj.int, y[i+t+1])
+  wm.cov[i] <- covr_fun(wmaj.int, y[i+t+1])
+  if(i %% 100 == 0){
+    print(sprintf("Done %i time steps",i))
+  }
+}
+
+mean(m.cov)
+mean(wm.cov)
+
+data.plot <- data.frame(
+  iter = 1:N,
+  local.m = stats::filter(m.cov, rep(1/100, 100)),
+  local.wm = stats::filter(wm.cov, rep(1/100, 100))
+)
+
+pM1<-ggplot(data.plot, aes(x = iter)) +
+  geom_line(aes(y = local.m, color = "Weighted Majority"), linetype = "solid") +
+  geom_line(aes(y = local.wm, color = "Rand. Weighted Majority"), linetype = "dashed") +
+  geom_hline(yintercept = 0.80, color = "black", linetype = "dashed") +
+  labs(title = expression(paste("Adaptive ", eta)), x = "Iter", y = "Local Level Coverage", color = "") +
+  scale_color_manual(values = c("Weighted Majority" = "forestgreen", "Rand. Weighted Majority" = "orange", "Bern 0.9" = "orange")) +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(0.5, 1)
+pM1
+
+
+# Fixed eta
+hedAlg <- hedge(loss.matrix, eta = 0.01)
+N <- NROW(hedAlg$weights)
+K <- NCOL(hedAlg$weights)
+t <- NROW(X)-N-1
+pi.m <- pi.wm <- matrix(NA, N, 2)
+m.cov <- rep(NA, N)
+wm.cov <- rep(NA, N)
+
+set.seed(1)
+for(i in 1:N){
+  conf.t <- rbind(m1$piAdapt[i,], m2$piAdapt[i,], m3$piAdapt[i,], m4$piAdapt[i,], m5$piAdapt[i,], m6$piAdapt[i,], m7$piAdapt[i,], m8$piAdapt[i,], m9$piAdapt[i,])
+  maj.int <- majority_vote(conf.t, w=hedAlg$weights[i,], 0.5)
+  wmaj.int <- majority_vote(conf.t, w=hedAlg$weights[i,], runif(1, 0.5, 1))
+  m.cov[i] <- covr_fun(maj.int, y[i+t+1])
+  wm.cov[i] <- covr_fun(wmaj.int, y[i+t+1])
+  if(i %% 100 == 0){
+    print(sprintf("Done %i time steps",i))
+  }
+}
+m.cov[is.na(m.cov)] <- F
+wm.cov[is.na(wm.cov)] <- F
+mean(m.cov)
+mean(wm.cov)
+
+data.plot <- data.frame(
+  iter = 1:N,
+  local.m = stats::filter(m.cov, rep(1/100, 100)),
+  local.wm = stats::filter(wm.cov, rep(1/100, 100))
+)
+
+pM2<-ggplot(data.plot, aes(x = iter)) +
+  geom_line(aes(y = local.m, color = "Weighted Majority"), linetype = "solid") +
+  geom_line(aes(y = local.wm, color = "Rand. Weighted Majority"), linetype = "dashed") +
+  geom_hline(yintercept = 0.80, color = "black", linetype = "dashed") +
+  labs(title = expression(eta==0.01), x = "Iter", y = "Local Level Coverage", color = "") +
+  scale_color_manual(values = c("Weighted Majority" = "forestgreen", "Rand. Weighted Majority" = "orange", "Bern 0.9" = "orange")) +
+  theme_minimal() + theme(legend.position = "bottom")+
+  ylim(0.5,1)
+pM2
+
+
+# Weights -----
+data.plot1 <- as.matrix(adahedAlg$weights)
+colnames(data.plot1) <- c("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9")
+data.plot1 <- as.data.frame(data.plot1)
+data.plot1$iter <- 1:nrow(data.plot1)
+
+p1<-ggplot(data.plot1, aes(x = iter)) +
+  geom_line(aes(y = m1, color = "m1"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m2, color = "m2"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m3, color = "m3"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m4, color = "m4"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m5, color = "m5"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m6, color = "m6"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m7, color = "m7"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m8, color = "m8"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m9, color = "m9"), linetype = "dotted", size = 0.75) +
+  labs(title = expression(paste("Adaptive ", eta)), x = "Iter", y = "Weights", color = "") +
+  scale_color_manual(values = c("m1" = "blue",  "m2" = "red", "m3" = "orange",  "m4" = "forestgreen",  "m5" = "pink", 
+                                "m6" = "purple",  "m7" = "yellow", "m8" = "gray58", "m9" = "black"),
+                     labels = c("m1" = expression(lambda[1]), "m2" = expression(lambda[2]), 
+                                "m3" = expression(lambda[3]), "m4" = expression(lambda[4]), 
+                                "m5" = expression(lambda[5]), "m6" = expression(lambda[6]), 
+                                "m7" = expression(lambda[7]), "m8" = expression(lambda[8]), 
+                                "m9" = expression(lambda[9]))) +
+  theme_minimal() + theme(legend.position = "bottom") 
+p1
+
+data.plot2 <- as.matrix(hedAlg$weights)
+colnames(data.plot2) <- c("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9")
+data.plot2 <- as.data.frame(data.plot2)
+data.plot2$iter <- 1:nrow(data.plot2)
+
+p2<-ggplot(data.plot2, aes(x = iter)) +
+  geom_line(aes(y = m1, color = "m1"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m2, color = "m2"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m3, color = "m3"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m4, color = "m4"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m5, color = "m5"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m6, color = "m6"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m7, color = "m7"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m8, color = "m8"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m9, color = "m9"), linetype = "dotted", size = 0.75) +
+  labs(title = expression(eta==0.01), x = "Iter", y = "Weights", color = "") +
+  scale_color_manual(values = c("m1" = "blue",  "m2" = "red", "m3" = "orange",  "m4" = "forestgreen",  "m5" = "pink", 
+                                "m6" = "purple",  "m7" = "yellow", "m8" = "gray58", "m9" = "black"),
+                     labels = c("m1" = expression(lambda[1]), "m2" = expression(lambda[2]), 
+                                "m3" = expression(lambda[3]), "m4" = expression(lambda[4]), 
+                                "m5" = expression(lambda[5]), "m6" = expression(lambda[6]), 
+                                "m7" = expression(lambda[7]), "m8" = expression(lambda[8]), 
+                                "m9" = expression(lambda[9]))) +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(0,1)
+p2
+
+
+# Correlation -----
+cors_lambda <- matrix(NA, nrow = length(m1$AdaptErr), ncol = 9)
+
+for(i in 20:length(m1$AdaptErr)){
+  cors_lambda[i,1] <- cor(m1$AdaptErr[1:i], adahedAlg$weights[1:i,1])
+  cors_lambda[i,2] <- cor(m2$AdaptErr[1:i], adahedAlg$weights[1:i,2])
+  cors_lambda[i,3] <- cor(m3$AdaptErr[1:i], adahedAlg$weights[1:i,3])
+  cors_lambda[i,4] <- cor(m4$AdaptErr[1:i], adahedAlg$weights[1:i,4])
+  cors_lambda[i,5] <- cor(m5$AdaptErr[1:i], adahedAlg$weights[1:i,5])
+  cors_lambda[i,6] <- cor(m6$AdaptErr[1:i], adahedAlg$weights[1:i,6])
+  cors_lambda[i,7] <- cor(m6$AdaptErr[1:i], adahedAlg$weights[1:i,7])
+  cors_lambda[i,8] <- cor(m6$AdaptErr[1:i], adahedAlg$weights[1:i,8])
+  cors_lambda[i,9] <- cor(m6$AdaptErr[1:i], adahedAlg$weights[1:i,9])
+}
+
+
+data.cor1 <- data.frame(
+  m1 = cors_lambda[,1],
+  m2 = cors_lambda[,2],
+  m3 = cors_lambda[,3],
+  m4 = cors_lambda[,4],
+  m5 = cors_lambda[,5],
+  m6 = cors_lambda[,6],
+  m7 = cors_lambda[,7],
+  m8 = cors_lambda[,8],
+  m9 = cors_lambda[,9],
+  iter = 1:NROW(cors_lambda)
+)
+
+p_cor1 <-ggplot(data.cor1, aes(x = iter)) +
+  geom_line(aes(y = m1, color = "m1"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m2, color = "m2"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m3, color = "m3"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m4, color = "m4"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m5, color = "m5"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m6, color = "m6"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m7, color = "m7"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m8, color = "m8"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m9, color = "m9"), linetype = "dotted", size = 0.75) +
+  labs(title = expression(paste("Adaptive ", eta)), x = "Iter", y = "correlation", color = "") +
+  scale_color_manual(values = c("m1" = "blue",  "m2" = "red", "m3" = "orange",  "m4" = "forestgreen",  "m5" = "pink", 
+                                "m6" = "purple",  "m7" = "yellow", "m8" = "gray58", "m9" = "black"),
+                     labels = c("m1" = expression(lambda[1]), "m2" = expression(lambda[2]), 
+                                "m3" = expression(lambda[3]), "m4" = expression(lambda[4]), 
+                                "m5" = expression(lambda[5]), "m6" = expression(lambda[6]), 
+                                "m7" = expression(lambda[7]), "m8" = expression(lambda[8]), 
+                                "m9" = expression(lambda[9]))) +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(-1,1)
+
+for(i in 20:length(m1$AdaptErr)){
+  cors_lambda[i,1] <- cor(m1$AdaptErr[1:i], hedAlg$weights[1:i,1])
+  cors_lambda[i,2] <- cor(m2$AdaptErr[1:i], hedAlg$weights[1:i,2])
+  cors_lambda[i,3] <- cor(m3$AdaptErr[1:i], hedAlg$weights[1:i,3])
+  cors_lambda[i,4] <- cor(m4$AdaptErr[1:i], hedAlg$weights[1:i,4])
+  cors_lambda[i,5] <- cor(m5$AdaptErr[1:i], hedAlg$weights[1:i,5])
+  cors_lambda[i,6] <- cor(m6$AdaptErr[1:i], hedAlg$weights[1:i,6])
+  cors_lambda[i,7] <- cor(m6$AdaptErr[1:i], hedAlg$weights[1:i,7])
+  cors_lambda[i,8] <- cor(m6$AdaptErr[1:i], hedAlg$weights[1:i,8])
+  cors_lambda[i,9] <- cor(m6$AdaptErr[1:i], hedAlg$weights[1:i,9])
+}
+
+
+data.cor2 <- data.frame(
+  m1 = cors_lambda[,1],
+  m2 = cors_lambda[,2],
+  m3 = cors_lambda[,3],
+  m4 = cors_lambda[,4],
+  m5 = cors_lambda[,5],
+  m6 = cors_lambda[,6],
+  m7 = cors_lambda[,7],
+  m8 = cors_lambda[,8],
+  m9 = cors_lambda[,9],
+  iter = 1:NROW(cors_lambda)
+)
+
+p_cor2 <-ggplot(data.cor2, aes(x = iter)) +
+  geom_line(aes(y = m1, color = "m1"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m2, color = "m2"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m3, color = "m3"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m4, color = "m4"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m5, color = "m5"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m6, color = "m6"), linetype = "dotted", size = 0.75) +
+  geom_line(aes(y = m7, color = "m7"), linetype = "solid", size = 0.75) +
+  geom_line(aes(y = m8, color = "m8"), linetype = "dashed", size = 0.75) +
+  geom_line(aes(y = m9, color = "m9"), linetype = "dotted", size = 0.75) +
+  labs(title = expression(eta==0.01), x = "Iter", y = "correlation", color = "") +
+  scale_color_manual(values = c("m1" = "blue",  "m2" = "red", "m3" = "orange",  "m4" = "forestgreen",  "m5" = "pink", 
+                                "m6" = "purple",  "m7" = "yellow", "m8" = "gray58", "m9" = "black"),
+                     labels = c("m1" = expression(lambda[1]), "m2" = expression(lambda[2]), 
+                                "m3" = expression(lambda[3]), "m4" = expression(lambda[4]), 
+                                "m5" = expression(lambda[5]), "m6" = expression(lambda[6]), 
+                                "m7" = expression(lambda[7]), "m8" = expression(lambda[8]), 
+                                "m9" = expression(lambda[9]))) +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(-1,1)
+
+# Sum of covariances -----
+sum_covs <- rep(NA, length(m1$AdaptErr))
+
+for(i in 20:length(m1$AdaptErr)){
+  sum_covs[i] <- cov(m1$AdaptErr[1:i], adahedAlg$weights[1:i,1]) + cov(m2$AdaptErr[1:i], adahedAlg$weights[1:i,2]) + cov(m3$AdaptErr[1:i], adahedAlg$weights[1:i,3]) +
+    cov(m4$AdaptErr[1:i], adahedAlg$weights[1:i,4]) + cov(m5$AdaptErr[1:i], adahedAlg$weights[1:i,5]) + cov(m6$AdaptErr[1:i], adahedAlg$weights[1:i,6]) + 
+    cov(m6$AdaptErr[1:i], adahedAlg$weights[1:i,7]) + cov(m6$AdaptErr[1:i], adahedAlg$weights[1:i,8]) + cov(m6$AdaptErr[1:i], adahedAlg$weights[1:i,9])
+}
+
+data.cov1 <- data.frame(
+  sum_covs = sum_covs,
+  iter = 1:NROW(cors_lambda)
+)
+
+p_cov1 <-ggplot(data.cov1, aes(x = iter)) +
+  geom_line(aes(y = sum_covs), linetype = "solid", size = 0.75) +
+  labs(title = expression(paste("Adaptive ", eta)), x = "Iter", y = "Sum of covariances", color = "") +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(-1, 1)
+
+sum_covs <- rep(NA, length(m1$AdaptErr))
+for(i in 20:length(m1$AdaptErr)){
+  sum_covs[i] <- cov(m1$AdaptErr[1:i], hedAlg$weights[1:i,1]) + cov(m2$AdaptErr[1:i], hedAlg$weights[1:i,2]) + cov(m3$AdaptErr[1:i], hedAlg$weights[1:i,3]) +
+    cov(m4$AdaptErr[1:i], hedAlg$weights[1:i,4]) + cov(m5$AdaptErr[1:i], hedAlg$weights[1:i,5]) + cov(m6$AdaptErr[1:i], hedAlg$weights[1:i,6]) + 
+    cov(m6$AdaptErr[1:i], hedAlg$weights[1:i,7]) + cov(m6$AdaptErr[1:i], hedAlg$weights[1:i,8]) + cov(m6$AdaptErr[1:i], hedAlg$weights[1:i,9])
+}
+
+data.cov2 <- data.frame(
+  sum_covs = sum_covs,
+  iter = 1:NROW(cors_lambda)
+)
+
+p_cov2 <-ggplot(data.cov2, aes(x = iter)) +
+  geom_line(aes(y = sum_covs), linetype = "solid", size = 0.75) +
+  labs(title = expression(eta==0.01), x = "Iter", y = "Sum of covariances", color = "") +
+  theme_minimal() + theme(legend.position = "bottom") + ylim(-1, 1)
+
+
+row1 <- grid.arrange(pM1, p1, p_cov1, nrow = 1)
+row2 <- grid.arrange(pM2, p2, p_cov2, nrow = 1)
+
+grid.arrange(row1, row2)
